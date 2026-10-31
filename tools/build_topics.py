@@ -15,9 +15,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import sys
+import zipfile
 import datetime as dt
-from collections import Counter
+import xml.etree.ElementTree as ET
+from collections import Counter, defaultdict
 from pathlib import Path
 from statistics import mean
 
@@ -704,6 +707,129 @@ topic(
     ],
     caveat="ERA5 재분석의 강설량은 넓은 격자의 추정값이라 기상청 관측과 다릅니다. "
            "쌓인 눈의 깊이(적설)가 아니라 하루 동안 내린 양입니다.")
+
+# ── 12. 초미세먼지 (서울시 측정소) ────────────────────────────────
+# 서울 열린데이터광장 OA-2220. 원본은 '날짜 × 구 측정소 1곳' 이고 서울 전체 행은 없다.
+# 그래서 날마다 값이 있는 구들만 평균해 '서울 하루 값'을 만들고, 모든 문항을 거기서 센다.
+# 초미세먼지는 2013년 7월까지 0~3곳만 재고 나머지는 0 으로 채워져 있다.
+# 25곳이 1년 내내 있는 첫 해가 2014년이라 기간을 2014~2025년으로 둔다.
+# 0 은 '측정 안 함'으로 보고 뺀다 (서울 하루 평균 초미세먼지가 0 일 수는 없다).
+PM_YEARS = range(2014, 2026)
+BAD = (35, 75)                     # 환경부 예보 '나쁨' 36~75. 하루 값이 소수라 35 초과 75 이하
+
+
+def read_xlsx(path):
+    """openpyxl 없이 첫 시트를 행 목록으로 읽는다 (2010~2017 원본이 xlsx)."""
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    z = zipfile.ZipFile(path)
+    ss = ["".join(t.text or "" for t in si.iter(f"{{{ns['m']}}}t"))
+          for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall("m:si", ns)]
+    rows = []
+    for r in ET.fromstring(z.read("xl/worksheets/sheet1.xml")).iter(f"{{{ns['m']}}}row"):
+        # 빈 칸은 xml 에서 아예 빠지므로, 열 글자(A·B·…)로 자리를 잡아야 밀리지 않는다
+        cells = {}
+        for c in r.findall("m:c", ns):
+            v = c.find("m:v", ns)
+            v = "" if v is None else v.text
+            col = 0
+            for ch in re.match(r"[A-Z]+", c.get("r")).group():
+                col = col * 26 + ord(ch) - 64
+            cells[col - 1] = ss[int(v)] if c.get("t") == "s" and v else v
+        rows.append([cells.get(i, "") for i in range(max(cells) + 1)] if cells else [])
+    return rows
+
+
+def read_air(year):
+    """한 해 원본 → [(날짜, 측정소, 초미세먼지)]. 파일 형식·인코딩·열 이름이 해마다 다르다."""
+    p = next(RAW.glob(f"seoul_air_daily_{year}.*"))
+    if p.suffix == ".xlsx":
+        rows = read_xlsx(p)
+    else:
+        b = p.read_bytes()
+        try:
+            t = b.decode("utf-8-sig")       # 2024 만 UTF-8
+        except UnicodeDecodeError:
+            t = b.decode("cp949")
+        rows = list(csv.reader(io.StringIO(t)))
+    h = rows[0]
+    i_d = next(i for i, x in enumerate(h) if x.startswith("측정일"))
+    i_s = h.index("측정소명")
+    i_p = next(i for i, x in enumerate(h) if x.startswith("초미세먼지"))
+    return [(r[i_d], r[i_s], r[i_p]) for r in rows[1:] if r]
+
+
+PM = {}                            # 날짜 → 서울 하루 값 (값이 있는 구 평균)
+PM_N = {}                          # 날짜 → 그날 값이 있는 구 수
+pm_gap = defaultdict(list)         # 마지막 해에 값이 빈 측정소 → 날짜들 (한계 문장용)
+for y in PM_YEARS:
+    per_day = defaultdict(list)
+    for d, s, v in read_air(y):
+        if v not in ("", "-") and float(v) > 0:
+            per_day[d].append(float(v))
+        elif y == PM_YEARS[-1]:
+            pm_gap[s].append(dt.datetime.strptime(d, "%Y%m%d").date())
+    for d, vs in per_day.items():
+        PM[dt.datetime.strptime(d, "%Y%m%d").date()] = mean(vs)
+        PM_N[dt.datetime.strptime(d, "%Y%m%d").date()] = len(vs)
+gap_st = max(pm_gap, key=lambda s: len(pm_gap[s]))
+
+bad_by_year = {y: sum(1 for d, v in PM.items() if d.year == y and BAD[0] < v <= BAD[1])
+               for y in PM_YEARS}
+bad_avg = mean(bad_by_year.values())
+pm_year = {y: mean(v for d, v in PM.items() if d.year == y) for y in PM_YEARS}
+y0, y1 = PM_YEARS[0], PM_YEARS[-1]
+pm_change = (pm_year[y1] - pm_year[y0]) / pm_year[y0] * 100
+pm_peak = max(PM, key=PM.get)
+pm_by_month = {m: mean(v for d, v in PM.items() if d.month == m) for m in range(1, 13)}
+pm_worst_m = max(pm_by_month, key=pm_by_month.get)
+pm_rank = sorted(pm_by_month, key=pm_by_month.get, reverse=True)
+
+topic(
+    "seoul-pm25", "🌫️", "서울 초미세먼지 12년",
+    "2014년부터 2025년까지, 서울 25개 구 측정소의 하루 평균",
+    "서울 열린데이터광장 · 기간별 일평균 대기환경 정보",
+    "https://data.seoul.go.kr/dataList/OA-2220/S/1/datasetView.do",
+    [
+        slider("f1", f"{y0}~{y1}년, 서울에서 초미세먼지 '나쁨'인 날은 한 해 평균 며칠일까요?",
+               bad_avg, "일", 0, 120, 1,
+               f"{y0}~{y1}년 서울 하루 값(25개 구 평균)이 '나쁨'({BAD[0]} 초과 "
+               f"{BAD[1]} 이하)인 날을 해마다 세어 평균하면 {bad_avg:.1f}일 "
+               f"(최소 {min(bad_by_year.values())}일 · 최대 {max(bad_by_year.values())}일)",
+               "마스크를 챙긴 날은 강하게 기억되지만, 1년 전체로 세면 크기가 다릅니다."),
+        slider("f2", f"{y0}년과 비교해 {y1}년 서울 초미세먼지 연평균은 몇 % 달라졌을까요?",
+               pm_change, "%", -60, 60, 1,
+               f"서울 하루 값(25개 구 평균)을 해마다 평균하면 {y0}년 "
+               f"{pm_year[y0]:.1f}㎍/㎥ → {y1}년 {pm_year[y1]:.1f}㎍/㎥ "
+               f"({pm_change:+.1f}%)",
+               "'해마다 나빠진다'는 인상과 실제 추세가 같은지 확인해 봅니다."),
+        slider("f3", f"{y0}~{y1}년, 서울의 하루 평균 초미세먼지가 가장 높았던 날은 "
+               "몇 ㎍/㎥일까요?",
+               PM[pm_peak], "㎍/㎥", 0, 200, 5,
+               f"{y0}~{y1}년 서울 하루 값(25개 구 평균)의 최댓값은 "
+               f"{pm_peak:%Y년 %m월 %d일} {PM[pm_peak]:.1f}㎍/㎥",
+               "최악의 날이 '나쁨' 기준의 몇 배인지는 짐작하기 어렵습니다."),
+        choice("f4", "서울에서 초미세먼지가 가장 나쁜 달은 언제일까요?",
+               ["12월", "1월", "2월", "3월"], f"{pm_worst_m}월",
+               f"{y0}~{y1}년 서울 하루 값(25개 구 평균)을 달별로 모아 평균하면 "
+               + " · ".join(f"{m}월 {pm_by_month[m]:.1f}" for m in pm_rank[:4])
+               + "㎍/㎥",
+               "황사 뉴스가 많은 봄과 실제 수치가 가장 높은 달은 다를 수 있습니다."),
+        slider("f5", "그 달의 초미세먼지 월평균은 몇 ㎍/㎥일까요?",
+               pm_by_month[pm_worst_m], "㎍/㎥", 0, 80, 1,
+               f"{y0}~{y1}년 {pm_worst_m}월의 서울 하루 값(25개 구 평균)을 모두 "
+               f"평균하면 {pm_by_month[pm_worst_m]:.1f}㎍/㎥ (연중 가장 낮은 "
+               f"{pm_rank[-1]}월은 {pm_by_month[pm_rank[-1]]:.1f})",
+               "가장 나쁜 달도 매일 나쁜 것은 아닙니다. 평균은 '나쁨' 기준보다 "
+               "낮게 나오기 쉽습니다."),
+    ],
+    # 파일 수정일은 원본 안에 없어서 데이터셋 화면의 파일 목록에서 옮겨 적었다 (2026-10-31 확인)
+    caveat="여기의 '서울 값'은 구마다 측정소 한 곳의 일평균을 그날 값이 있는 구 "
+           f"{min(PM_N.values())}~25곳끼리 평균하고 0은 측정하지 않은 값으로 빼서 "
+           f"{y0}년부터 센 것이며, {y1}년 파일은 2026년 4월 1일에 수정된 것으로 "
+           f"{gap_st} {min(pm_gap[gap_st]):%m월 %d일}~{max(pm_gap[gap_st]):%m월 %d일} "
+           f"값이 {len(pm_gap[gap_st])}일 비어 있고 앞으로 다시 수정될 수 있으며 출처가 "
+           "측정값의 확정 여부를 밝히지 않아, 다른 곳에서 본 서울 초미세먼지 숫자와 "
+           "다를 수 있습니다.")
 
 
 # ════════════════════════════════════════════════════════════════

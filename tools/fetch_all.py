@@ -17,6 +17,7 @@ import http.client
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -32,6 +33,7 @@ UA = {"User-Agent": "gam-test-class/1.0 (data analysis class)"}
 TIMEOUT = 90
 
 SEOUL = (37.5665, 126.9780)
+SEOUL_DATA_FILE = "https://datafile.seoul.go.kr/bigfile/iot/inf/nio_download.do?useCache=false"
 
 # 날씨는 **모델을 ERA5로 못 박는다** (&models=era5).
 # 모델을 적지 않으면 Open-Meteo가 그때그때 '가장 알맞은 모델'(best_match)을 골라 섞어 준다.
@@ -124,10 +126,24 @@ SOURCES: list[tuple[str, str, str]] = [
      "?format=geojson&starttime=2000-01-01&endtime=2024-12-31"
      "&minmagnitude=3.0&minlatitude=33&maxlatitude=39.5"
      "&minlongitude=124&maxlongitude=132&limit=20000"),
+
+    # 서울 열린데이터광장 OA-2220 「서울시 기간별 일평균 대기환경 정보」 — 25개 구 측정소 일평균.
+    # Sheet · OpenAPI 는 최근 1년만 주고 키가 필요하다. 연도별 파일은 키 없이 POST 로 받는다.
+    # seq 는 데이터셋 화면의 파일 목록 번호다. 2010~2017 은 xlsx, 2018~ 은 csv(cp949) 로 올라와 있다
+    *[(f"seoul_air_daily_{y}.{ext}",
+       f"서울 구별 일평균 대기환경 {y} (서울 열린데이터광장 OA-2220)",
+       SEOUL_DATA_FILE,
+       {"infId": "OA-2220", "infSeq": "3", "seq": str(seq)})
+      for y, seq, ext in (
+          (2010, 6, "xlsx"), (2011, 7, "xlsx"), (2012, 8, "xlsx"), (2013, 9, "xlsx"),
+          (2014, 10, "xlsx"), (2015, 11, "xlsx"), (2016, 12, "xlsx"), (2017, 13, "xlsx"),
+          (2018, 22, "csv"), (2019, 23, "csv"), (2020, 24, "csv"), (2021, 25, "csv"),
+          (2022, 27, "csv"), (2023, 28, "csv"), (2024, 29, "csv"), (2025, 30, "csv"),
+      )],
 ]
 
 
-def get(url: str, dest: Path, tries: int = 4) -> int:
+def get(url: str, dest: Path, form: dict[str, str] | None = None, tries: int = 4) -> int:
     """받는다. 잠깐의 실패면 기다렸다가 다시 시도한다.
 
     공개 API 는 대부분 호출 제한이 있고(429), 큰 파일은 받다가 끊기기도 한다
@@ -137,9 +153,14 @@ def get(url: str, dest: Path, tries: int = 4) -> int:
     wait = 5
     for i in range(tries):
         try:
-            req = urllib.request.Request(url, headers=UA)
+            body = urllib.parse.urlencode(form).encode() if form else None
+            req = urllib.request.Request(url, data=body, headers=UA)
             with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
                 data = r.read()
+                html = r.headers.get_content_type() == "text/html"
+            # 서울 열린데이터광장은 seq 가 틀려도 200 과 '잘못된 접근' 안내 페이지를 준다
+            if form and html:
+                raise urllib.error.URLError("파일 대신 안내 페이지가 왔습니다 (seq 확인)")
             dest.write_bytes(data)
             return len(data)
         except urllib.error.HTTPError as e:
@@ -160,14 +181,14 @@ def main() -> int:
     force = "--force" in sys.argv
     RAW.mkdir(parents=True, exist_ok=True)
     fail = 0
-    for name, desc, url in SOURCES:
+    for name, desc, url, *form in SOURCES:
         dest = RAW / name
         if dest.exists() and not force:
             print(f"  건너뜀  {name:<22} 이미 있음 ({dest.stat().st_size/1024:,.0f}KB)")
             continue
         t0 = time.time()
         try:
-            n = get(url, dest)
+            n = get(url, dest, form[0] if form else None)
             print(f"  받음    {name:<22} {n/1024:>7,.0f}KB  {time.time()-t0:.1f}s  {desc}")
         except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as e:
             print(f"  실패    {name:<22} {e}")
