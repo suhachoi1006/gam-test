@@ -1,18 +1,25 @@
 /* 감 테스트 — 폰 세로 화면 기준.
    큰 화면에서는 가운데 한 칸으로만 넓어집니다. */
 
+/* 신문 1면 느낌 — 미색 종이, 검은 잉크, 명조 계열 글꼴, 가는 회색 줄 */
 :root {
-  --bg: #0f1020;
-  --bg2: #191b35;
-  --card: #21243f;
-  --line: #2f3358;
-  --ink: #f2f3fb;
-  --muted: #9aa0c6;
-  --brand: #7c8cff;
-  --ok: #34d399;
-  --warn: #fbbf24;
-  --miss: #fb7185;
-  --radius: 16px;
+  color-scheme: light;
+  --bg: #fbfaf5;
+  --card: #fffefa;
+  --line: #cfccc2;
+  --rule: #141414;
+  --ink: #141414;
+  --muted: #5c5950;
+  --brand: #141414;
+  --brand-soft: #efece3;
+  --on-brand: #fbfaf5;
+  --ok: #11785a;
+  --warn: #a5680a;
+  --miss: #c2334d;
+  --radius: 6px;
+  /* 새 글꼴 파일을 받지 않고 기기에 있는 명조를 쓴다 */
+  --serif: "AppleMyungjo", "Nanum Myeongjo", "Noto Serif KR", "Noto Serif CJK KR",
+           "Batang", "바탕", serif;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -23,10 +30,9 @@
 
 html, body {
   margin: 0;
-  background: radial-gradient(900px 600px at 50% -10%, var(--bg2), var(--bg));
+  background: var(--bg);
   color: var(--ink);
-  font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo",
-               Pretendard, "Malgun Gothic", sans-serif;
+  font-family: var(--serif);
   font-size: 16px;
   line-height: 1.6;
   min-height: 100dvh;
@@ -48,13 +54,20 @@ h2 { font-size: 21px; line-height: 1.4; margin: 6px 0 22px; letter-spacing: -.3p
 .lead { font-size: 15px; color: var(--muted); margin-top: 14px; }
 .fineprint { font-size: 12px; color: var(--muted); text-align: center; margin-top: 14px; }
 
-/* 시작 화면 */
-.hero { padding: 34px 0 30px; }
-.badge-day {
-  display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: 2px;
-  color: var(--brand); border: 1px solid var(--line);
-  border-radius: 999px; padding: 4px 11px;
+/* 시작 화면 — 이중선 · 머리글 · 가운데 큰 제목 · 기울인 부제 · 굵은 줄 */
+.hero {
+  text-align: center; padding: 12px 0 16px; margin-bottom: 4px;
+  border-bottom: 1.5px solid var(--rule);
 }
+.masthead {
+  border-top: 4px double var(--rule); border-bottom: 1.5px solid var(--rule);
+  padding: 6px 0; font-size: 14px; letter-spacing: .3em;
+}
+.hero h1 {
+  font-size: clamp(34px, 11vw, 46px); font-weight: 700; line-height: 1.15;
+  letter-spacing: 0; margin: 18px 0 4px;
+}
+.subtitle { font-size: 18px; font-style: italic; margin: 0; }
 .banner {
   background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
   padding: 13px 15px; font-size: 14px; margin: 0 0 8px;
@@ -66,7 +79,7 @@ button {
   font: inherit; font-weight: 700; border: 0; border-radius: 14px;
   width: 100%; padding: 17px; cursor: pointer;
 }
-.primary { background: var(--brand); color: #0e1030; }
+.primary { background: var(--brand); color: var(--on-brand); }
 .primary:disabled { background: var(--line); color: var(--muted); cursor: default; }
 .ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
 .actions { display: grid; gap: 10px; margin-top: 26px; }
@@ -87,7 +100,7 @@ button {
   transition: transform .06s ease, border-color .15s ease;
 }
 .choice:active { transform: scale(.985); }
-.choice[aria-pressed="true"] { border-color: var(--brand); background: #2a2f5c; }
+.choice[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-soft); }
 
 /* 슬라이더 */
 .slider-out {
@@ -131,7 +144,7 @@ input[type=range]::-moz-range-thumb {
 
 /* 결과 — 촌평 */
 .ai {
-  background: linear-gradient(135deg, #2a2f5c, #21243f);
+  background: linear-gradient(135deg, var(--brand-soft), var(--card));
   border: 1px solid var(--line); border-radius: var(--radius);
   padding: 16px 17px; font-size: 14.5px; margin-bottom: 16px;
 }
@@ -208,14 +221,19 @@ details[open] summary::after { content: " ▴"; }
 .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 6px 0 18px; }
 .tcard {
   background: var(--card); border: 1px solid var(--line); color: var(--ink);
-  border-radius: 16px; padding: 16px 14px; text-align: left;
+  border-radius: 0; padding: 16px 14px; text-align: left;
   display: flex; flex-direction: column; gap: 4px; min-height: 132px;
-  position: relative; transition: transform .06s ease, border-color .15s ease;
+  position: relative;
+  transition: transform .06s ease, border-color .15s ease;
 }
+/* 한글은 기본값이 '글자마다 끊어도 됨'이라 좁은 칸에서 낱말 중간이 잘린다.
+   낱말(띄어쓰기) 단위로 끊고, 한 낱말이 칸보다 길 때만 낱말 안에서 끊는다 */
+.hero, .tcard { word-break: keep-all; overflow-wrap: break-word; }
+.tcard:hover { border-color: var(--rule); }
 .tcard:active { transform: scale(.985); }
 .tcard.done { border-color: var(--ok); }
 .temoji { font-size: 26px; line-height: 1.1; }
-.ttitle { font-size: 14.5px; font-weight: 700; line-height: 1.35; }
+.ttitle { font-size: 16px; font-weight: 700; line-height: 1.35; }
 .tblurb { font-size: 11.5px; color: var(--muted); line-height: 1.45; font-weight: 400; }
 .tscore {
   position: absolute; top: 12px; right: 12px; font-size: 11px;
